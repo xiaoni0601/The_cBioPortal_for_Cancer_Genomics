@@ -1,0 +1,366 @@
+---
+title: "cBioPortal API Workshop"
+author: "Xiaoni"
+date: "6/5/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##Introduction
+This vignette lays out the two main user-facing functions for downloading and representing data from the cBioPortal API. cBioDataPack makes use of the legacy distribution data method in cBioPortal (via tarballs). cBioPortalData allows for a more flexibile approach to obtaining data based on several available parameters including available molecular profiles.
+
+##Installation
+
+```{r}
+#BiocManager::install('cBioPortalData')
+library(cBioPortalData)
+library(AnVIL)
+```
+
+##Initialize the API Client
+###cBioPortalData: Obtain data from the cBioPortal API
+
+
+```{r}
+cbio <- cBioPortal()
+cbio
+```
+
+###Compute some simple stats
+1.how many studies are there?
+2.how many cancer types do they span?
+3.how many samples in total?
+4.which study has the largest number of samples?
+
+
+###Pull data from the API endpoint using cBioPortalData
+
+```{r}
+resp <- cbio$getAllStudiesUsingGET()
+resp
+```
+
+####parseResponse
+```{r}
+parsedResponse <- httr::content(resp)
+cat("Number of elements in the response:", length(parsedResponse))
+
+```
+Since we know in this case that each element represents a study, we can answer question 1:
+
+```{r question 1}
+cat("Answer 1: There are", length(parsedResponse), "studies in cBioPortalData")
+```
+
+
+```{r}
+studies <- getStudies(cbio)
+studies
+```
+
+
+```{r question 1 alternate}
+dim(studies)
+cat("Answer 1: There are", nrow(studies), "studies in cBioPortal")
+colnames(studies)
+```
+
+```{r question 2}
+cat("Answer 2: The studies span", length(unique(studies$cancerTypeId)), "cancer types")
+```
+
+```{r question 3}
+cat("Answer 3: There are", sum(studies$allSampleCount), "samples in cBioPortal")
+
+```
+
+```{r question 4}
+cat("Answer 4: The study with the most samples is", studies[which.max(studies$allSampleCount), "name"][[1]])
+
+```
+
+
+
+####List all function in a package
+```{r}
+ls("package:cBioPortalData")
+```
+
+```{r}
+browseVignettes(package = 'cBioPortalData')
+```
+
+
+
+###Visualize data
+
+####Transform data using tidyverse
+Get the top 20 counts per cancer type
+```{r}
+cancerTypeCounts_T <-                                                  # assign results
+  studies %>%                                                          # %>% is the pipe operator
+  group_by(cancerTypeId) %>%                                           # and group by cancer type
+  summarise(totalSamples=sum(allSampleCount), .groups = 'drop') %>%    # sum allSampleCount, add column
+  arrange(desc(totalSamples)) %>%                                      # sort by totalSamples
+  top_n(20)                                                            # take top 20
+
+cancerTypeCounts_T 
+```
+
+
+```{r filter mixed}
+cancerTypeCounts <- 
+  studies %>%
+  filter(cancerTypeId != 'mixed') %>%
+  group_by(cancerTypeId) %>%
+  summarise(totalSamples=sum(allSampleCount), .groups = 'drop') %>%
+  arrange(desc(totalSamples)) %>%
+  top_n(20)
+
+cancerTypeCounts 
+```
+
+
+```{r}
+library(ggplot2)
+cancerTypeCounts <- cancerTypeCounts %>% arrange(cancerTypeCounts$totalSamples)
+par(mar = c(4,6,1,1))
+barplot(cancerTypeCounts$totalSamples,
+        names = cancerTypeCounts$cancerTypeId,
+        main = "Number of samples by top 20 Primary Sites",
+        horiz = TRUE,
+        las = 1)
+
+```
+
+
+###Example 1: Get data from Prostate Adenocarcinoma (TCGA, Cell 2015)
+```{r}
+## load packages:
+library(cBioPortalData)
+library(httr)
+library(dplyr)
+library(stringr)
+library(biomaRt)
+library(ggplot2)
+studies = as.data.frame(getStudies(cBioPortal()))
+head(studies)
+```
+#### list all prostate cancer studies available
+
+```{r}
+studies[grep('Prostate.*', studies$name), c('name', 'studyId')] 
+
+##go for Prostate Adenocarcinoma (TCGA, Cell 2015); prad_tcga_pub
+## list all study (ID) participants
+all.patients = cbio$getAllPatientsInStudyUsingGET(studyId = 'prad_tcga_pub')
+all.patients = httr::content(all.patients, as = 'parsed')
+
+## convert to data frame; easier downstream handling
+patients_dataframe = data.frame(matrix(
+  unlist(all.patients),
+  nrow = length(all.patients),
+  byrow = T
+))
+colnames(patients_dataframe) = c('Identifier', 'Patient_ID', 'Study_ID')
+head(patients_dataframe)
+
+
+all_samples = allSamples(cbio, studyId = 'prad_tcga_pub')
+head(all_samples)
+```
+
+###look into clinical attributes (data)
+```{r}
+patient.x.clinics = cbio$getAllClinicalDataOfPatientInStudyUsingGET(studyId = 'prad_tcga_pub',
+                                                                    patientId = 'TCGA-VP-A87C')
+patient.x.clinics = httr::content(patient.x.clinics)
+patient.x.clinics = data.frame(matrix(
+  unlist(patient.x.clinics),
+  nrow = length(patient.x.clinics),
+  byrow = T))
+
+## delete first (unesseccary) column
+patient.x.clinics$X1 = NULL
+
+colnames(patient.x.clinics) = c('Patient_ID', 'Study_ID', 'Attribute', 'Value')
+head(patient.x.clinics)
+
+```
+
+```{r}
+patient.x.sample = cbio$getAllClinicalDataOfSampleInStudyUsingGET(studyId = 'prad_tcga_pub',
+sampleId = 'TCGA-VP-A87C-01') ## compare to above here
+patient.x.sample = httr::content(patient.x.sample)
+patient.x.sample = data.frame(matrix(
+  unlist(patient.x.sample),
+  nrow = length(patient.x.sample),
+  byrow = T)) 
+patient.x.sample$X1 = NULL
+patient.x.sample$X2 = NULL
+patient.x.sample$X3 = NULL
+colnames(patient.x.sample) = c('Patient_ID', 'Study_ID', 'Attribute', 'Value')
+head(patient.x.sample) 
+```
+
+#### retrieve all the clinical data from all study participants
+```{r}
+## get all the clinical data for all patients
+all.clinics = cbio$getAllClinicalDataInStudyUsingGET(studyId = 'prad_tcga_pub')
+all.clinics = httr::content(all.clinics)
+all.clinics = data.frame(matrix(
+  unlist(all.clinics),
+  nrow = length(all.clinics),
+  byrow = T)) ## convert again, easier handling
+all.clinics[, c(1, 2, 3)] = NULL
+head(all.clinics)
+
+all_clinical_data = clinicalData(cbio, studyId = 'prad_tcga_pub')
+head(all_clinical_data)
+```
+
+####plot Age at diagnosis
+
+```{r}
+ggplot() +
+  geom_bar(
+    data = all_clinical_data,
+    aes(x = as.numeric(AGE)),
+    color = 'royalblue',
+    fill = 'royalblue',
+    na.rm = T,
+    width = 0.8) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(44, 76, 2)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 50)) +
+  theme(axis.text.x = element_text(angle = -45)) +
+  labs(x = '', y = '', title = 'Diagnosis Age')
+
+```
+##### race category
+
+```{r}
+race = as.data.frame(table(all_clinical_data$RACE))
+ggplot(race, aes(x = "", y = Freq, fill = Var1)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) + theme_void()
+```
+#### look at number of mutations vs fraction genome altered:
+```{r}
+FGA = all.clinics[all.clinics$X6 == 'FRACTION_GENOME_ALTERED', ] ## subset dataframe
+mutation.count = all.clinics[all.clinics$X6 == 'MUTATION_COUNT', ] ## subset dataframe
+data.figure1 = merge(FGA[,c(1, 4)],
+                     mutation.count[,c(1,4)],
+                     by.x = 'X4',
+                     by.y = 'X4',
+                     all = T) ## merge the two data frame to prepare for plot
+colnames(data.figure1) = c('patient', 'FGA', 'mutation.count')
+
+
+ggplot(data.figure1, aes(x = as.numeric(FGA),
+                         y = as.numeric(mutation.count))) +
+  geom_jitter() +
+  theme_bw() +
+  theme(legend.position = 'none', aspect.ratio = 1) +
+  scale_y_continuous(limits = c(0, 750), expand = c(0,0), breaks = seq(0, 800, by = 100)) +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0), breaks = seq(0, 1, by = 0.1)) +
+  labs(x = 'Fraction Genome Altered', y = '# of mutations', title = 'Mutation count VS FGA')
+```
+
+###Turning into molecular data
+```{r}
+genomic_parameters = molecularProfiles(cbio,
+                                       studyId = 'prad_tcga_pub',
+                                       projection = c('SUMMARY'))
+
+print(genomic_parameters[, 'molecularProfileId'])
+print(genomic_parameters[, 'molecularAlterationType'])
+```
+#### look into one specific patient and retrieve the mutational spectrum
+```{r}
+mart.object <- useMart("ensembl", 
+                       dataset = "hsapiens_gene_ensembl")
+genes_ids <- getBM(mart = mart.object,
+                   attributes = c("hgnc_symbol", "entrezgene_id"))
+
+genes_ids = unique(as.vector(genes_ids$entrezgene_id), na.rm = T)
+all.patient.mutations = molecularData(
+  api = cbio,
+  molecularProfileId = 'prad_tcga_pub_mutations',
+  entrezGeneIds = genes_ids,
+  sampleIds = paste0(patients_dataframe$Patient_ID, '-01'),
+  check = T
+)
+head(all.patient.mutations)
+
+
+## look into one specific patient:
+all.patient.mutations[all.patient.mutations$patientId == 'TCGA-VP-A87C', ]
+```
+##What is MultiAssayExperiment?
+
+```{r}
+browseVignettes(package = "MultiAssayExperiment")
+```
+
+#Example 2:MAE
+
+####Brief explanation what an MAE is:
+The essence of a MultiAssayExperiment: * The essence of MultiAssayExperiment is the following: Imagine
+you have a bookshelf;
+* The whole bookshelf is one particular study; then image the levels within the bookshelf * every levels in
+this bookshelf is one particular assay or experiment (e.g. CopyNumber Calls)
+* Those Assays/Experiments are stored as lists within the MultiAssayExperiment Object. you can combine
+different experiments on one sample/study and commonly work with them
+experiments may be measures of mRNA, copyNumber Alterations, and mutations calls (among others)
+
+
+####Example:
+On Lung Invasisve Adenocarcinomas (LUAD) from TCGA by creating a MAE object with luad_tcga data from cBIO
+
+#####load libraries
+```{r}
+library(cBioPortalData)
+library(httr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(MultiAssayExperiment)
+library(S4Vectors)
+library(UpSetR)
+```
+
+
+```{r}
+## list all Assays/Experiments for this particular study:
+Assays_available = molecularProfiles(api = cbio,
+                                     studyId = 'luad_tcga',
+                                     projection = 'SUMMARY')
+Assay_Ids = Assays_available$molecularProfileId # in this case we have 15 Assays available
+Assay_Ids
+
+```
+```{r}
+##downloads and create an MAE automatically:
+LUAD_Multiassay = cBioDataPack(cancer_study_id = 'luad_tcga')
+#LUAD_Multiassay
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
